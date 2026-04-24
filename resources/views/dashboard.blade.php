@@ -1,6 +1,6 @@
-@extends('layouts.admin')
+@extends('layouts.app')
 
 @section('content')
     <h1>Dashboard</h1>
-    <p>Welcome to your admin panel</p>
+    <p>Welcome to your SaaS admin panel</p>
 @endsection
