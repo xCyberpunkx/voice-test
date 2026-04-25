@@ -25,23 +25,24 @@
     #voice-status.thinking { background: #ede9fe; color: #5b21b6; }
 </style>
 
-<div class="page-title">📦 Products Dashboard</div>
+<div class="page-title">📦 Multilingual Product Dashboard</div>
 
 <div class="card">
-    <h3>🎤 Voice Command</h3>
+    <h3>🎤 Voice Command (works in any language!)</h3>
     <p style="color:#6b7280; font-size:14px; margin-bottom:10px;">
-        Try: "add iPhone price 500 quantity 10" · "delete iPhone" · "show products"
+        English: "add iPhone price 500 quantity 10" · Spanish: "agregar iPhone precio 500 cantidad 10"<br>
+        French: "ajouter iPhone prix 500 quantité 10" · Hindi: "iPhone जोड़ें कीमत 500 मात्रा 10"
     </p>
     <button class="btn-mic" id="mic-btn" onclick="toggleVoice()">🎤 Click to Speak</button>
     <div id="voice-status">Waiting for command...</div>
 </div>
 
 <div class="card">
-    <h3>Add Product</h3>
+    <h3>Add Product Manually</h3>
     <div class="grid">
         <input id="name" placeholder="Product name">
-        <input id="price" placeholder="Price">
-        <input id="quantity" placeholder="Quantity">
+        <input id="price" placeholder="Price" type="number" step="0.01">
+        <input id="quantity" placeholder="Quantity" type="number">
     </div>
     <button class="btn-add" onclick="createProduct()">+ Add Product</button>
 </div>
@@ -60,12 +61,18 @@
 const API = "/api/products";
 const GROQ_KEY = "{{ env('GROQ_KEY') }}";
 
+if (!GROQ_KEY || GROQ_KEY === '') {
+    alert('GROQ_KEY is not set. Please add it to your .env file.');
+}
+
+// Helper to set status message with styling
 function setStatus(msg, type = '') {
     const el = document.getElementById('voice-status');
     el.textContent = msg;
     el.className = type;
 }
 
+// ---------- Voice Recording ----------
 let mediaRecorder;
 let audioChunks = [];
 let isListening = false;
@@ -95,6 +102,7 @@ async function toggleVoice() {
                 const formData = new FormData();
                 formData.append('file', audioBlob, 'audio.webm');
                 formData.append('model', 'whisper-large-v3-turbo');
+                // No 'language' parameter → Whisper auto-detects language
 
                 const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
                     method: 'POST',
@@ -106,12 +114,12 @@ async function toggleVoice() {
                 console.log('WHISPER RESPONSE:', JSON.stringify(whisperData));
 
                 if (!whisperData.text) {
-                    setStatus('❌ Could not transcribe audio', 'error');
+                    setStatus('❌ Could not transcribe audio. Please try again.', 'error');
                     return;
                 }
 
                 const transcript = whisperData.text;
-                setStatus(`📝 Heard: "${transcript}" — thinking...`, 'thinking');
+                setStatus(`📝 Heard (auto-detected language): "${transcript}" — thinking...`, 'thinking');
                 parseWithGroq(transcript);
 
             } catch (err) {
@@ -126,12 +134,45 @@ async function toggleVoice() {
         setStatus('🎤 Recording... click mic again to stop', 'thinking');
 
     } catch (err) {
-        setStatus(`❌ Mic access denied: ${err.message}`, 'error');
+        setStatus(`❌ Microphone access denied: ${err.message}`, 'error');
     }
 }
 
+// ---------- Natural Language Parsing (multilingual) ----------
 async function parseWithGroq(transcript) {
     try {
+        // Updated prompt with multilingual examples
+        const systemPrompt = 
+`You are a multilingual product management assistant. You understand and process voice commands in ANY language.
+You extract product information and return ONLY a raw JSON object, no markdown, no backticks, no explanation.
+
+The JSON format must be:
+{ "action": "create|update|delete|list", "name": "product name or null", "price": number or null, "quantity": number or null }
+
+Rules:
+- "name" must be the product name only, never null for create commands.
+- "price" and "quantity" must be numbers only (not strings like "five"). Use null if not provided.
+- For "update" action, only include fields that should be changed.
+- For "delete" action, only name is needed.
+- For "list" action, everything else should be null.
+
+Examples in multiple languages:
+
+English:
+"add iPhone price 500 quantity 10" → { "action": "create", "name": "iPhone", "price": 500, "quantity": 10 }
+"delete Samsung" → { "action": "delete", "name": "Samsung", "price": null, "quantity": null }
+"show all products" → { "action": "list", "name": null, "price": null, "quantity": null }
+"change Pixel price to 600" → { "action": "update", "name": "Pixel", "price": 600, "quantity": null }
+
+French:
+"ajouter iPhone prix 500 quantité 10" → { "action": "create", "name": "iPhone", "price": 500, "quantity": 10 }
+"supprimer Samsung" → { "action": "delete", "name": "Samsung" }
+
+
+Now process the following command (already transcribed from speech):
+"${transcript}"
+`;
+
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -139,27 +180,11 @@ async function parseWithGroq(transcript) {
                 'Authorization': `Bearer ${GROQ_KEY}`
             },
             body: JSON.stringify({
-                model: 'llama-3.1-8b-instant',
-                messages: [{
-                    role: 'system',
-                    content: `You are a product management assistant. Extract product info from voice commands.
-Return ONLY a raw JSON object, no markdown, no backticks, no explanation.
-Format: { "action": "create|update|delete|list", "name": "string or null", "price": number or null, "quantity": number or null }
-
-Rules:
-- "name" must be the product name only, never null for create commands
-- "price" and "quantity" must be numbers only, never strings or words
-- If you cannot find a number for price or quantity, use null
-
-Examples:
-"add iPhone price 500 quantity 10" → { "action": "create", "name": "iPhone", "price": 500, "quantity": 10 }
-"create a product called Samsung for 300 dollars 5 units" → { "action": "create", "name": "Samsung", "price": 300, "quantity": 5 }
-"delete iPhone" → { "action": "delete", "name": "iPhone", "price": null, "quantity": null }
-"show all products" → { "action": "list", "name": null, "price": null, "quantity": null }`
-                }, {
-                    role: 'user',
-                    content: transcript
-                }]
+                model: 'openai/gpt-oss-120b',  // this model supports multiple languages
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: transcript }
+                ]
             })
         });
 
@@ -167,22 +192,37 @@ Examples:
         console.log('GROQ RESPONSE:', JSON.stringify(data));
 
         if (!data.choices || !data.choices[0]) {
-            setStatus(`❌ Groq error: ${data.error?.message || 'Unknown error'}`, 'error');
+            setStatus(`❌ AI understanding failed: ${data.error?.message || 'Unknown error'}`, 'error');
             return;
         }
 
-        const raw = data.choices[0].message.content.trim();
+        let raw = data.choices[0].message.content.trim();
+
+        // Robust JSON extraction – removes any surrounding markdown code fences
+        raw = raw.replace(/^```[\s\S]*?\n/, '').replace(/\n```$/, '').trim();
+
+        // Sometimes the model encloses JSON in backticks without a language marker
+        raw = raw.replace(/^`+|`+$/g, '').trim();
 
         let parsed;
         try {
             parsed = JSON.parse(raw);
         } catch {
-            const cleaned = raw.replace(/```json|```/g, '').trim();
-            parsed = JSON.parse(cleaned);
+            // If still fails, try to extract the first {...} block
+            const match = raw.match(/\{[\s\S]*\}/);
+            if (match) {
+                try { parsed = JSON.parse(match[0]); } catch(e2) {
+                    setStatus('❌ Failed to parse AI response as JSON', 'error');
+                    return;
+                }
+            } else {
+                setStatus('❌ AI response was not valid JSON', 'error');
+                return;
+            }
         }
 
-        console.log('PARSED:', JSON.stringify(parsed));
-        setStatus(`🤖 AI understood: ${JSON.stringify(parsed)}`, 'thinking');
+        console.log('PARSED COMMAND:', JSON.stringify(parsed));
+        setStatus(`✅ Understood: ${parsed.action} "${parsed.name || ''}"`, 'thinking');
         await executeAction(parsed);
 
     } catch (err) {
@@ -191,53 +231,60 @@ Examples:
     }
 }
 
+// ---------- Execute the parsed action ----------
 async function executeAction(cmd) {
     try {
         if (cmd.action === 'list') {
             await loadProducts();
-            setStatus('✅ Products loaded', 'success');
+            setStatus('✅ Product list refreshed', 'success');
             return;
         }
 
         if (cmd.action === 'create') {
-            if (!cmd.name) {
-                setStatus('❌ Could not understand product name. Try: "add iPhone price 500 quantity 10"', 'error');
+            if (!cmd.name || cmd.name.trim() === '') {
+                setStatus('❌ I missed the product name. Please try again, e.g. "add iPhone price 500 quantity 10"', 'error');
                 return;
             }
-            if (cmd.price === null || cmd.price === undefined) {
-                setStatus('❌ Could not understand price. Try: "add iPhone price 500 quantity 10"', 'error');
+            if (cmd.price == null || isNaN(cmd.price)) {
+                setStatus('❌ I need a valid price. Please say something like "price 500"', 'error');
                 return;
             }
-            if (cmd.quantity === null || cmd.quantity === undefined) {
-                setStatus('❌ Could not understand quantity. Try: "add iPhone price 500 quantity 10"', 'error');
+            if (cmd.quantity == null || isNaN(cmd.quantity)) {
+                setStatus('❌ I need a quantity. Please say "quantity 10"', 'error');
                 return;
             }
 
+            // Ensure numbers are sent as numbers
             const res = await fetch(API, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                body: JSON.stringify({ name: cmd.name, price: cmd.price, quantity: cmd.quantity })
+                body: JSON.stringify({
+                    name: cmd.name.trim(),
+                    price: Number(cmd.price),
+                    quantity: Number(cmd.quantity)
+                })
             });
 
             const result = await res.json();
-            console.log('CREATE RESULT:', result);
-
             if (!res.ok) {
                 setStatus(`❌ Create failed: ${JSON.stringify(result)}`, 'error');
                 return;
             }
-
             setStatus(`✅ Created "${cmd.name}"`, 'success');
         }
 
-        if (cmd.action === 'delete') {
+        else if (cmd.action === 'delete') {
             if (!cmd.name) {
-                setStatus('❌ Could not understand product name to delete', 'error');
+                setStatus('❌ Which product should I delete? Try "delete Apple"', 'error');
                 return;
             }
             const res = await fetch(API);
             const products = await res.json();
-            const match = products.find(p => p.name.toLowerCase().includes(cmd.name.toLowerCase()));
+            // Case-insensitive exact match first, then partial if needed
+            let match = products.find(p => p.name.toLowerCase() === cmd.name.toLowerCase());
+            if (!match) {
+                match = products.find(p => p.name.toLowerCase().includes(cmd.name.toLowerCase()));
+            }
             if (!match) {
                 setStatus(`❌ Product "${cmd.name}" not found`, 'error');
                 return;
@@ -246,28 +293,37 @@ async function executeAction(cmd) {
             setStatus(`✅ Deleted "${match.name}"`, 'success');
         }
 
-        if (cmd.action === 'update') {
+        else if (cmd.action === 'update') {
             if (!cmd.name) {
-                setStatus('❌ Could not understand product name to update', 'error');
+                setStatus('❌ Which product should I update?', 'error');
                 return;
             }
             const res = await fetch(API);
             const products = await res.json();
-            const match = products.find(p => p.name.toLowerCase().includes(cmd.name.toLowerCase()));
+            let match = products.find(p => p.name.toLowerCase() === cmd.name.toLowerCase());
+            if (!match) {
+                match = products.find(p => p.name.toLowerCase().includes(cmd.name.toLowerCase()));
+            }
             if (!match) {
                 setStatus(`❌ Product "${cmd.name}" not found`, 'error');
                 return;
             }
+
+            const updateBody = {};
+            if (cmd.name) updateBody.name = cmd.name.trim();
+            if (cmd.price != null && !isNaN(cmd.price)) updateBody.price = Number(cmd.price);
+            if (cmd.quantity != null && !isNaN(cmd.quantity)) updateBody.quantity = Number(cmd.quantity);
+
             await fetch(`${API}/${match.id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name: cmd.name ?? match.name,
-                    price: cmd.price ?? match.price,
-                    quantity: cmd.quantity ?? match.quantity
-                })
+                body: JSON.stringify(updateBody)
             });
             setStatus(`✅ Updated "${match.name}"`, 'success');
+        }
+
+        else {
+            setStatus(`❓ Unknown action: ${cmd.action}. Try "add", "delete", or "show products".`, 'error');
         }
 
         await loadProducts();
@@ -277,31 +333,42 @@ async function executeAction(cmd) {
     }
 }
 
+// ---------- Manual CRUD ----------
 async function loadProducts() {
-    const res = await fetch(API);
-    const data = await res.json();
-    document.getElementById("table").innerHTML = data.map(p => `
-        <tr>
-            <td>${p.name}</td>
-            <td>$${p.price}</td>
-            <td>${p.quantity}</td>
-            <td>
-                <div class="actions">
-                    <button class="btn-edit" onclick="editProduct(${p.id}, '${p.name}', ${p.price}, ${p.quantity})">Edit</button>
-                    <button class="btn-delete" onclick="deleteProduct(${p.id})">Delete</button>
-                </div>
-            </td>
-        </tr>
-    `).join('');
+    try {
+        const res = await fetch(API);
+        if (!res.ok) throw new Error('Failed to load products');
+        const data = await res.json();
+        const tbody = document.getElementById("table");
+        tbody.innerHTML = data.map(p => {
+            // Escape strings for inline event handlers safely using JSON.stringify
+            const safeName = JSON.stringify(p.name);
+            return `
+            <tr>
+                <td>${p.name}</td>
+                <td>$${p.price}</td>
+                <td>${p.quantity}</td>
+                <td>
+                    <div class="actions">
+                        <button class="btn-edit" onclick="editProduct(${p.id}, ${safeName}, ${p.price}, ${p.quantity})">Edit</button>
+                        <button class="btn-delete" onclick="deleteProduct(${p.id})">Delete</button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('');
+    } catch (err) {
+        console.error(err);
+        document.getElementById("table").innerHTML = '<tr><td colspan="4">Error loading products</td></tr>';
+    }
 }
 
 async function createProduct() {
-    const name = document.getElementById("name").value;
-    const price = document.getElementById("price").value;
-    const quantity = document.getElementById("quantity").value;
+    const name = document.getElementById("name").value.trim();
+    const price = parseFloat(document.getElementById("price").value);
+    const quantity = parseInt(document.getElementById("quantity").value, 10);
 
-    if (!name || !price || !quantity) {
-        alert('Please fill in all fields');
+    if (!name || isNaN(price) || isNaN(quantity)) {
+        alert('Please fill in all fields with valid numbers');
         return;
     }
 
@@ -319,22 +386,35 @@ async function createProduct() {
 }
 
 async function deleteProduct(id) {
+    if (!confirm('Are you sure you want to delete this product?')) return;
     await fetch(`${API}/${id}`, { method: "DELETE" });
     loadProducts();
 }
 
 async function editProduct(id, nameVal, priceVal, qtyVal) {
     const newName = prompt("Name:", nameVal);
+    if (newName === null) return; // cancelled
     const newPrice = prompt("Price:", priceVal);
+    if (newPrice === null) return;
     const newQty = prompt("Quantity:", qtyVal);
+    if (newQty === null) return;
+
+    const priceNum = parseFloat(newPrice);
+    const qtyNum = parseInt(newQty, 10);
+    if (isNaN(priceNum) || isNaN(qtyNum)) {
+        alert('Invalid number entered');
+        return;
+    }
+
     await fetch(`${API}/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName, price: newPrice, quantity: newQty })
+        body: JSON.stringify({ name: newName.trim(), price: priceNum, quantity: qtyNum })
     });
     loadProducts();
 }
 
+// Initial load
 loadProducts();
 </script>
 
