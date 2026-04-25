@@ -64,7 +64,7 @@
 
 <div class="card">
     <h3>🎤 Voice Command</h3>
-    <p style="color:#6b7280; font-size:14px; margin-bottom:10px;">Try: "add iPhone price 999 quantity 10" · "show products" · "delete Samsung" · "find cheap products"</p>
+    <p style="color:#6b7280; font-size:14px; margin-bottom:10px;">Try: "add iPhone price 999 quantity 10" · "show products" · "delete Samsung"</p>
     <button class="btn-mic" id="mic-btn" onclick="toggleVoice()">🎤 Click to Speak</button>
     <button class="btn-clear" onclick="clearHistory()" style="margin-left:10px;">Clear</button>
     <div id="voice-status">Ready for commands...</div>
@@ -117,6 +117,16 @@ let allProducts = [];
 let voiceHistory = [];
 let chatHistory = [];
 
+// Check if API key is present
+if (!GROQ_KEY || GROQ_KEY.includes('{{')) {
+    console.error('❌ GROQ_KEY is not set in your .env file!');
+    document.querySelector('#chat-messages').innerHTML += `
+        <div class="chat-message agent">
+            <strong>🤖 Agent</strong>
+            <div style="color:red;">⚠️ Please set GROQ_KEY in your .env file.</div>
+        </div>`;
+}
+
 // ====================== HELPER FUNCTIONS ======================
 function setStatus(msg, type = '') {
     const el = document.getElementById('voice-status');
@@ -143,8 +153,12 @@ function clearHistory() {
         </div>`;
 }
 
-// ====================== CORE FUNCTIONS ======================
-async function callGroq(messages, temperature = 0.3, maxTokens = 500) {
+// ====================== GROQ API CALL ======================
+async function callGroq(messages, temperature = 0.1, maxTokens = 500) {
+    if (!GROQ_KEY || GROQ_KEY.includes('{{')) {
+        throw new Error('API key not configured');
+    }
+    
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -152,7 +166,7 @@ async function callGroq(messages, temperature = 0.3, maxTokens = 500) {
             'Authorization': `Bearer ${GROQ_KEY}`
         },
         body: JSON.stringify({
-            model: 'llama-8b-instant', // Fast, reliable model
+            model: 'llama3-8b-8192', // Correct model name
             messages: messages,
             temperature: temperature,
             max_tokens: maxTokens
@@ -160,22 +174,23 @@ async function callGroq(messages, temperature = 0.3, maxTokens = 500) {
     });
     
     if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Groq API Error:', errorText);
-        throw new Error(`API error: ${response.status}`);
+        const errorBody = await response.text();
+        console.error('Groq API Error:', response.status, errorBody);
+        throw new Error(`API Error ${response.status}: ${errorBody.substring(0, 100)}`);
     }
     
     const data = await response.json();
+    console.log('Groq Response:', data);
     return data.choices?.[0]?.message?.content?.trim() || '';
 }
 
 function extractJson(text) {
-    // Try to find JSON in the text
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
         try {
             return JSON.parse(jsonMatch[0]);
         } catch (e) {
+            console.error('JSON Parse Error:', e);
             return null;
         }
     }
@@ -209,7 +224,7 @@ YOUR CAPABILITIES:
 - List/search products
 - Provide statistics
 
-IMPORTANT RULES:
+RULES:
 1. If the user wants to perform an action, respond with ONLY a JSON object (no other text) in this format:
    For adding: {"action":"add","products":[{"name":"Product Name","price":99.99,"quantity":10}]}
    For deleting: {"action":"delete","products":["Product Name"]}
@@ -219,42 +234,20 @@ IMPORTANT RULES:
    For stats: {"action":"stats"}
    For searching: {"action":"search","query":"search term"}
 
-2. If the user says just "add product" without details, DO NOT return JSON. Instead, ask them for the name, price, and quantity.
+2. If the user says just "add product" without details, DO NOT return JSON. Instead, ask for the name, price, and quantity.
 
-3. If the user provides complete information (name + price + quantity), immediately return the JSON action.
+3. If the user provides complete info (name + price + quantity), immediately return the JSON action.
 
-4. Extract product names, prices, and quantities from natural language. For example:
+4. Extract product names, prices, and quantities from natural language. Examples:
    "add iPhone price 999 quantity 10" -> name:iPhone, price:999, quantity:10
    "Samsung $799 x15" -> name:Samsung, price:799, quantity:15
-   "Ajoutez iPhone prix 500 quantité 10" -> name:iPhone, price:500, quantity:10 (French)
+   "add 3 products: A $10 qty 5, B $20 qty 10, C $30 qty 15" -> three products
 
-5. Always use numbers (not strings) for price and quantity.
+5. Always use numbers for price and quantity.
 
-6. Be conversational and helpful when asking for clarification.
+6. For multiple products, use the array format in the JSON.
 
-7. If they say things like "show products" or "list inventory", return {"action":"list"}
-
-EXAMPLES:
-User: "add iPhone price 999 quantity 10"
-You: {"action":"add","products":[{"name":"iPhone","price":999,"quantity":10}]}
-
-User: "delete iPhone and Samsung"
-You: {"action":"delete","products":["iPhone","Samsung"]}
-
-User: "show products"
-You: {"action":"list"}
-
-User: "add product"
-You: I'd be happy to add a product! Could you tell me the name, price, and quantity? For example: "add iPhone price 999 quantity 10"
-
-User: "what's in stock?"
-You: {"action":"list"}
-
-User: "rename iPhone to Xiaomi"
-You: {"action":"rename","oldName":"iPhone","newName":"Xiaomi"}
-
-User: "update iPhone price to 899"
-You: {"action":"update","products":[{"name":"iPhone","price":899}]}`;
+7. If user says "show products" or "list inventory", return {"action":"list"}`;
 
     const messages = [
         { role: 'system', content: systemPrompt },
@@ -270,17 +263,15 @@ You: {"action":"update","products":[{"name":"iPhone","price":899}]}`;
         const action = extractJson(response);
         
         if (action) {
-            // Execute the action
-            const result = await executeAction(action);
-            return result;
+            return await executeAction(action);
         }
         
-        // If no JSON, return the text response
+        // If no JSON, it's a conversational message
         return response;
         
     } catch (error) {
         console.error('Agent Error:', error);
-        return "I'm sorry, I encountered an error. Please try again.";
+        return `❌ Error: ${error.message}. Please check the console for details.`;
     }
 }
 
@@ -289,37 +280,38 @@ async function executeAction(action) {
         switch (action.action) {
             case 'add':
                 if (!action.products || !Array.isArray(action.products)) {
-                    return "❌ Invalid add request. Please specify products to add.";
+                    return "❌ Invalid add request.";
                 }
                 const addResults = [];
                 for (const product of action.products) {
                     if (!product.name || product.price == null || product.quantity == null) {
-                        addResults.push(`❌ Missing info for a product. Need name, price, and quantity.`);
+                        addResults.push(`❌ Missing info for: ${JSON.stringify(product)}`);
                         continue;
                     }
-                    const res = await fetch(API, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                        body: JSON.stringify({
-                            name: String(product.name),
-                            price: Number(product.price),
-                            quantity: Number(product.quantity)
-                        })
-                    });
-                    if (res.ok) {
-                        addResults.push(`✅ Added "${product.name}" - $${product.price} (Qty: ${product.quantity})`);
-                    } else {
-                        const err = await res.text();
-                        addResults.push(`❌ Failed to add "${product.name}": ${err}`);
+                    try {
+                        const res = await fetch(API, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                            body: JSON.stringify({
+                                name: String(product.name),
+                                price: Number(product.price),
+                                quantity: Number(product.quantity)
+                            })
+                        });
+                        if (res.ok) {
+                            addResults.push(`✅ Added "${product.name}" - $${product.price} (Qty: ${product.quantity})`);
+                        } else {
+                            const err = await res.text();
+                            addResults.push(`❌ Failed to add "${product.name}": ${err}`);
+                        }
+                    } catch (e) {
+                        addResults.push(`❌ Error adding "${product.name}": ${e.message}`);
                     }
                 }
                 await loadProducts();
                 return addResults.join('\n');
                 
             case 'delete':
-                if (!action.products || !Array.isArray(action.products)) {
-                    return "❌ Invalid delete request.";
-                }
                 await loadProducts();
                 const deleteResults = [];
                 for (const name of action.products) {
@@ -335,9 +327,6 @@ async function executeAction(action) {
                 return deleteResults.join('\n');
                 
             case 'rename':
-                if (!action.oldName || !action.newName) {
-                    return "❌ Please specify both old and new names.";
-                }
                 await loadProducts();
                 const renameMatch = allProducts.find(p => p.name.toLowerCase().includes(action.oldName.toLowerCase()));
                 if (!renameMatch) return `❌ "${action.oldName}" not found`;
@@ -350,65 +339,45 @@ async function executeAction(action) {
                 return `✅ Renamed "${renameMatch.name}" to "${action.newName}"`;
                 
             case 'update':
-                if (!action.products || !Array.isArray(action.products)) {
-                    return "❌ Invalid update request.";
-                }
                 await loadProducts();
                 const updateResults = [];
                 for (const update of action.products) {
                     const match = allProducts.find(p => p.name.toLowerCase().includes(update.name.toLowerCase()));
-                    if (!match) {
-                        updateResults.push(`❌ "${update.name}" not found`);
-                        continue;
-                    }
+                    if (!match) { updateResults.push(`❌ "${update.name}" not found`); continue; }
                     const body = {};
                     if (update.price != null) body.price = Number(update.price);
                     if (update.quantity != null) body.quantity = Number(update.quantity);
-                    if (Object.keys(body).length === 0) {
-                        updateResults.push(`❌ No updates specified for "${update.name}"`);
-                        continue;
-                    }
-                    const res = await fetch(`${API}/${match.id}`, {
+                    await fetch(`${API}/${match.id}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(body)
                     });
-                    if (res.ok) {
-                        updateResults.push(`✅ Updated "${match.name}"`);
-                    } else {
-                        updateResults.push(`❌ Failed to update "${match.name}"`);
-                    }
+                    updateResults.push(`✅ Updated "${match.name}"`);
                 }
                 await loadProducts();
                 return updateResults.join('\n');
                 
             case 'list':
                 await loadProducts();
-                if (allProducts.length === 0) return "📭 Your inventory is empty.";
-                return "📋 Current Inventory:\n" + allProducts.map(p => 
-                    `• ${p.name}: $${parseFloat(p.price).toFixed(2)} (Qty: ${p.quantity})`
-                ).join('\n');
+                return allProducts.length === 0 ? "📭 Inventory is empty." : 
+                    "📋 Current Inventory:\n" + allProducts.map(p => `• ${p.name}: $${parseFloat(p.price).toFixed(2)} (Qty: ${p.quantity})`).join('\n');
                 
             case 'stats':
-                await loadProducts();
                 const ctx = getInventoryContext();
                 return `📊 Stats: ${ctx.count} products | Total Value: $${ctx.totalValue} | Avg Price: $${ctx.avgPrice}`;
                 
             case 'search':
-                if (!action.query) return "❌ What would you like to search for?";
                 await loadProducts();
                 const matches = allProducts.filter(p => p.name.toLowerCase().includes(action.query.toLowerCase()));
-                if (matches.length === 0) return `🔍 No products matching "${action.query}"`;
-                return `🔍 Found ${matches.length}:\n` + matches.map(p => 
-                    `• ${p.name}: $${parseFloat(p.price).toFixed(2)} (Qty: ${p.quantity})`
-                ).join('\n');
+                return matches.length === 0 ? `🔍 No products matching "${action.query}"` : 
+                    `🔍 Found ${matches.length}:\n` + matches.map(p => `• ${p.name}: $${parseFloat(p.price).toFixed(2)} (Qty: ${p.quantity})`).join('\n');
                 
             default:
-                return "❓ I'm not sure what action to take. Can you rephrase?";
+                return "❓ Unknown action.";
         }
     } catch (error) {
         console.error('Execute Error:', error);
-        return `❌ Error: ${error.message}`;
+        return `❌ Error executing action: ${error.message}`;
     }
 }
 
@@ -441,7 +410,7 @@ async function sendChatMessage() {
         chatHistory.push({ role: 'assistant', content: reply });
     } catch (error) {
         removeTyping();
-        addChatMessage('agent', '❌ Sorry, something went wrong.');
+        addChatMessage('agent', `❌ ${error.message}`);
     }
     
     isChatProcessing = false;
@@ -481,10 +450,7 @@ document.getElementById('chat-input').addEventListener('keypress', e => {
 let mediaRecorder, audioChunks = [], isListening = false;
 
 async function toggleVoice() {
-    if (isListening) {
-        mediaRecorder?.stop();
-        return;
-    }
+    if (isListening) { mediaRecorder?.stop(); return; }
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaRecorder = new MediaRecorder(stream);
@@ -514,7 +480,7 @@ async function toggleVoice() {
                 const reply = await processUserInput(transcript);
                 chatHistory.push({ role: 'assistant', content: reply });
                 
-                setStatus(`✅ ${reply}`, 'success');
+                setStatus(`✅ Done`, 'success');
                 addToHistory(transcript, reply);
             } catch (e) {
                 setStatus(`❌ ${e.message}`, 'error');
