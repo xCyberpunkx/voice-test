@@ -8,7 +8,7 @@
     .page-title { font-size: 26px; font-weight: bold; margin-bottom: 20px; }
     .card { background: white; padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
     .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 10px; }
-    input, select { padding: 10px; border: 1px solid #ddd; border-radius: 8px; outline: none; width: 100%; }
+    input { padding: 10px; border: 1px solid #ddd; border-radius: 8px; outline: none; width: 100%; }
     button { padding: 10px 14px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: all 0.2s; }
     button:hover { opacity: 0.9; transform: translateY(-1px); }
     .btn-add { background: #2563eb; color: white; }
@@ -56,7 +56,7 @@
 
 <div class="page-title">🧠 AI Inventory Agent</div>
 
-<div class="stats">
+<div class="stats" id="stats">
     <div class="stat-card"><div class="stat-value" id="total-products">0</div><div class="stat-label">Total Products</div></div>
     <div class="stat-card"><div class="stat-value" id="total-value">$0</div><div class="stat-label">Total Value</div></div>
     <div class="stat-card"><div class="stat-value" id="avg-price">$0</div><div class="stat-label">Avg Price</div></div>
@@ -117,23 +117,16 @@ let allProducts = [];
 let voiceHistory = [];
 let chatHistory = [];
 
-// Check if API key is present
 if (!GROQ_KEY || GROQ_KEY.includes('{{')) {
-    console.error('❌ GROQ_KEY is not set in your .env file!');
-    document.querySelector('#chat-messages').innerHTML += `
-        <div class="chat-message agent">
-            <strong>🤖 Agent</strong>
-            <div style="color:red;">⚠️ Please set GROQ_KEY in your .env file.</div>
-        </div>`;
+    console.error('GROQ_KEY not set in .env');
 }
 
-// ====================== HELPER FUNCTIONS ======================
+// ====================== HELPERS ======================
 function setStatus(msg, type = '') {
     const el = document.getElementById('voice-status');
     el.textContent = msg;
     el.className = type;
 }
-
 function addToHistory(transcript, result) {
     voiceHistory.unshift({ transcript, result, time: new Date().toLocaleTimeString() });
     if (voiceHistory.length > 10) voiceHistory.pop();
@@ -141,59 +134,36 @@ function addToHistory(transcript, result) {
         `<div class="voice-history-item">🕐 ${h.time} - "${h.transcript}" → ${h.result}</div>`
     ).join('');
 }
-
 function clearHistory() {
     voiceHistory = [];
     document.getElementById('voice-history').innerHTML = '';
     chatHistory = [];
-    document.getElementById('chat-messages').innerHTML = `
-        <div class="chat-message agent">
-            <strong>🤖 Agent</strong>
-            <div>Conversation cleared. How can I help?</div>
-        </div>`;
+    document.getElementById('chat-messages').innerHTML = `<div class="chat-message agent"><strong>🤖 Agent</strong><div>Conversation cleared. How can I help?</div></div>`;
 }
 
-// ====================== GROQ API CALL ======================
-async function callGroq(messages, temperature = 0.1, maxTokens = 500) {
-    if (!GROQ_KEY || GROQ_KEY.includes('{{')) {
-        throw new Error('API key not configured');
-    }
-    
+// ====================== GROQ CALL ======================
+async function callGroq(messages) {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${GROQ_KEY}`
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${GROQ_KEY}` },
         body: JSON.stringify({
-            model: 'llama3-8b-8192', // Correct model name
+            model: 'llama-3.1-8b-instant',   // <<< CORRECT MODEL
             messages: messages,
-            temperature: temperature,
-            max_tokens: maxTokens
+            temperature: 0.1,
+            max_tokens: 500
         })
     });
-    
     if (!response.ok) {
-        const errorBody = await response.text();
-        console.error('Groq API Error:', response.status, errorBody);
-        throw new Error(`API Error ${response.status}: ${errorBody.substring(0, 100)}`);
+        const err = await response.text();
+        throw new Error(`API Error ${response.status}: ${err}`);
     }
-    
     const data = await response.json();
-    console.log('Groq Response:', data);
     return data.choices?.[0]?.message?.content?.trim() || '';
 }
 
 function extractJson(text) {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-        try {
-            return JSON.parse(jsonMatch[0]);
-        } catch (e) {
-            console.error('JSON Parse Error:', e);
-            return null;
-        }
-    }
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) { try { return JSON.parse(m[0]); } catch(e){} }
     return null;
 }
 
@@ -209,213 +179,112 @@ function getInventoryContext() {
 // ====================== AI AGENT ======================
 async function processUserInput(userMessage) {
     const context = getInventoryContext();
-    
-    const systemPrompt = `You are an AI inventory management assistant. You help users manage their product inventory.
+    const system = `You are an AI inventory assistant. Current inventory: ${JSON.stringify(context.products)}. 
+Total: ${context.count} products, Value: $${context.totalValue}, Avg Price: $${context.avgPrice}.
 
-CURRENT INVENTORY:
-${JSON.stringify(context.products, null, 2)}
-Total: ${context.count} products | Value: $${context.totalValue} | Avg Price: $${context.avgPrice}
+If user wants an action, respond with ONLY JSON:
+- Add: {"action":"add","products":[{"name":"...","price":99,"quantity":5}]}
+- Delete: {"action":"delete","products":["name"]}
+- Rename: {"action":"rename","oldName":"old","newName":"new"}
+- Update: {"action":"update","products":[{"name":"...","price":99}]}
+- List: {"action":"list"}
+- Stats: {"action":"stats"}
+- Search: {"action":"search","query":"term"}
 
-YOUR CAPABILITIES:
-- Add products (single or multiple)
-- Delete products (single or multiple)
-- Rename products
-- Update prices and quantities
-- List/search products
-- Provide statistics
-
-RULES:
-1. If the user wants to perform an action, respond with ONLY a JSON object (no other text) in this format:
-   For adding: {"action":"add","products":[{"name":"Product Name","price":99.99,"quantity":10}]}
-   For deleting: {"action":"delete","products":["Product Name"]}
-   For renaming: {"action":"rename","oldName":"Old Name","newName":"New Name"}
-   For updating: {"action":"update","products":[{"name":"Product Name","price":99.99,"quantity":10}]}
-   For listing: {"action":"list"}
-   For stats: {"action":"stats"}
-   For searching: {"action":"search","query":"search term"}
-
-2. If the user says just "add product" without details, DO NOT return JSON. Instead, ask for the name, price, and quantity.
-
-3. If the user provides complete info (name + price + quantity), immediately return the JSON action.
-
-4. Extract product names, prices, and quantities from natural language. Examples:
-   "add iPhone price 999 quantity 10" -> name:iPhone, price:999, quantity:10
-   "Samsung $799 x15" -> name:Samsung, price:799, quantity:15
-   "add 3 products: A $10 qty 5, B $20 qty 10, C $30 qty 15" -> three products
-
-5. Always use numbers for price and quantity.
-
-6. For multiple products, use the array format in the JSON.
-
-7. If user says "show products" or "list inventory", return {"action":"list"}`;
+If information is missing, ask politely. Extract details from natural language.`;
 
     const messages = [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: system },
         ...chatHistory.slice(-10),
         { role: 'user', content: userMessage }
     ];
-
-    try {
-        const response = await callGroq(messages, 0.1, 400);
-        console.log('AI Response:', response);
-        
-        // Try to parse as JSON action
-        const action = extractJson(response);
-        
-        if (action) {
-            return await executeAction(action);
-        }
-        
-        // If no JSON, it's a conversational message
-        return response;
-        
-    } catch (error) {
-        console.error('Agent Error:', error);
-        return `❌ Error: ${error.message}. Please check the console for details.`;
-    }
+    const reply = await callGroq(messages);
+    console.log('AI:', reply);
+    const action = extractJson(reply);
+    if (action) return await executeAction(action);
+    return reply;
 }
 
 async function executeAction(action) {
     try {
-        switch (action.action) {
-            case 'add':
-                if (!action.products || !Array.isArray(action.products)) {
-                    return "❌ Invalid add request.";
-                }
-                const addResults = [];
-                for (const product of action.products) {
-                    if (!product.name || product.price == null || product.quantity == null) {
-                        addResults.push(`❌ Missing info for: ${JSON.stringify(product)}`);
-                        continue;
-                    }
-                    try {
-                        const res = await fetch(API, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                            body: JSON.stringify({
-                                name: String(product.name),
-                                price: Number(product.price),
-                                quantity: Number(product.quantity)
-                            })
-                        });
-                        if (res.ok) {
-                            addResults.push(`✅ Added "${product.name}" - $${product.price} (Qty: ${product.quantity})`);
-                        } else {
-                            const err = await res.text();
-                            addResults.push(`❌ Failed to add "${product.name}": ${err}`);
-                        }
-                    } catch (e) {
-                        addResults.push(`❌ Error adding "${product.name}": ${e.message}`);
-                    }
-                }
-                await loadProducts();
-                return addResults.join('\n');
-                
-            case 'delete':
-                await loadProducts();
-                const deleteResults = [];
-                for (const name of action.products) {
-                    const match = allProducts.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
-                    if (match) {
-                        await fetch(`${API}/${match.id}`, { method: 'DELETE' });
-                        deleteResults.push(`✅ Deleted "${match.name}"`);
-                    } else {
-                        deleteResults.push(`❌ "${name}" not found`);
-                    }
-                }
-                await loadProducts();
-                return deleteResults.join('\n');
-                
-            case 'rename':
-                await loadProducts();
-                const renameMatch = allProducts.find(p => p.name.toLowerCase().includes(action.oldName.toLowerCase()));
-                if (!renameMatch) return `❌ "${action.oldName}" not found`;
-                await fetch(`${API}/${renameMatch.id}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: String(action.newName) })
+        if (action.action === 'add') {
+            const results = [];
+            for (const p of action.products) {
+                const res = await fetch(API, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                    body: JSON.stringify({ name: String(p.name), price: Number(p.price), quantity: Number(p.quantity) })
                 });
-                await loadProducts();
-                return `✅ Renamed "${renameMatch.name}" to "${action.newName}"`;
-                
-            case 'update':
-                await loadProducts();
-                const updateResults = [];
-                for (const update of action.products) {
-                    const match = allProducts.find(p => p.name.toLowerCase().includes(update.name.toLowerCase()));
-                    if (!match) { updateResults.push(`❌ "${update.name}" not found`); continue; }
-                    const body = {};
-                    if (update.price != null) body.price = Number(update.price);
-                    if (update.quantity != null) body.quantity = Number(update.quantity);
-                    await fetch(`${API}/${match.id}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body)
-                    });
-                    updateResults.push(`✅ Updated "${match.name}"`);
-                }
-                await loadProducts();
-                return updateResults.join('\n');
-                
-            case 'list':
-                await loadProducts();
-                return allProducts.length === 0 ? "📭 Inventory is empty." : 
-                    "📋 Current Inventory:\n" + allProducts.map(p => `• ${p.name}: $${parseFloat(p.price).toFixed(2)} (Qty: ${p.quantity})`).join('\n');
-                
-            case 'stats':
-                const ctx = getInventoryContext();
-                return `📊 Stats: ${ctx.count} products | Total Value: $${ctx.totalValue} | Avg Price: $${ctx.avgPrice}`;
-                
-            case 'search':
-                await loadProducts();
-                const matches = allProducts.filter(p => p.name.toLowerCase().includes(action.query.toLowerCase()));
-                return matches.length === 0 ? `🔍 No products matching "${action.query}"` : 
-                    `🔍 Found ${matches.length}:\n` + matches.map(p => `• ${p.name}: $${parseFloat(p.price).toFixed(2)} (Qty: ${p.quantity})`).join('\n');
-                
-            default:
-                return "❓ Unknown action.";
+                results.push(res.ok ? `✅ Added "${p.name}"` : `❌ Failed "${p.name}": ${await res.text()}`);
+            }
+            await loadProducts();
+            return results.join('\n');
         }
-    } catch (error) {
-        console.error('Execute Error:', error);
-        return `❌ Error executing action: ${error.message}`;
-    }
+        if (action.action === 'delete') {
+            await loadProducts();
+            const results = [];
+            for (const name of action.products) {
+                const m = allProducts.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
+                if (m) { await fetch(`${API}/${m.id}`, { method: 'DELETE' }); results.push(`✅ Deleted "${m.name}"`); }
+                else results.push(`❌ "${name}" not found`);
+            }
+            await loadProducts();
+            return results.join('\n');
+        }
+        if (action.action === 'rename') {
+            await loadProducts();
+            const m = allProducts.find(p => p.name.toLowerCase().includes(action.oldName.toLowerCase()));
+            if (!m) return `❌ "${action.oldName}" not found`;
+            await fetch(`${API}/${m.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: String(action.newName) }) });
+            await loadProducts();
+            return `✅ Renamed "${m.name}" to "${action.newName}"`;
+        }
+        if (action.action === 'update') {
+            await loadProducts();
+            const results = [];
+            for (const u of action.products) {
+                const m = allProducts.find(p => p.name.toLowerCase().includes(u.name.toLowerCase()));
+                if (!m) { results.push(`❌ "${u.name}" not found`); continue; }
+                const body = {};
+                if (u.price != null) body.price = Number(u.price);
+                if (u.quantity != null) body.quantity = Number(u.quantity);
+                await fetch(`${API}/${m.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                results.push(`✅ Updated "${m.name}"`);
+            }
+            await loadProducts();
+            return results.join('\n');
+        }
+        if (action.action === 'list') { await loadProducts(); return allProducts.length ? '📋 ' + allProducts.map(p => `• ${p.name}: $${p.price} (Qty: ${p.quantity})`).join('\n') : '📭 Empty'; }
+        if (action.action === 'stats') { const c = getInventoryContext(); return `📊 ${c.count} products, Value: $${c.totalValue}, Avg Price: $${c.avgPrice}`; }
+        if (action.action === 'search') { await loadProducts(); const ms = allProducts.filter(p => p.name.toLowerCase().includes(action.query.toLowerCase())); return ms.length ? '🔍 ' + ms.map(p => `• ${p.name}: $${p.price} (Qty: ${p.quantity})`).join('\n') : `No match for "${action.query}"`; }
+        return "❓ Unknown action";
+    } catch(e) { return `❌ ${e.message}`; }
 }
 
 // ====================== CHAT ======================
 let isChatProcessing = false;
-
-function toggleChat() {
-    const container = document.getElementById('chat-container');
-    container.style.display = container.style.display === 'flex' ? 'none' : 'flex';
-}
-
+function toggleChat() { const c = document.getElementById('chat-container'); c.style.display = c.style.display === 'flex' ? 'none' : 'flex'; }
 async function sendChatMessage() {
     if (isChatProcessing) return;
     const input = document.getElementById('chat-input');
-    const message = input.value.trim();
-    if (!message) return;
-    
+    const msg = input.value.trim(); if (!msg) return;
     input.value = '';
-    addChatMessage('user', message);
-    chatHistory.push({ role: 'user', content: message });
+    addChatMessage('user', msg);
+    chatHistory.push({ role: 'user', content: msg });
     if (chatHistory.length > 20) chatHistory = chatHistory.slice(-20);
-    
     isChatProcessing = true;
     showTyping();
-    
     try {
-        const reply = await processUserInput(message);
+        const reply = await processUserInput(msg);
         removeTyping();
         addChatMessage('agent', reply);
         chatHistory.push({ role: 'assistant', content: reply });
-    } catch (error) {
+    } catch(e) {
         removeTyping();
-        addChatMessage('agent', `❌ ${error.message}`);
+        addChatMessage('agent', `❌ ${e.message}`);
     }
-    
     isChatProcessing = false;
 }
-
 function addChatMessage(role, text) {
     const div = document.createElement('div');
     div.className = `chat-message ${role}`;
@@ -424,31 +293,16 @@ function addChatMessage(role, text) {
     area.appendChild(div);
     area.scrollTop = area.scrollHeight;
 }
-
 function showTyping() {
-    const div = document.createElement('div');
-    div.className = 'chat-message agent';
-    div.id = 'typing';
+    const div = document.createElement('div'); div.className = 'chat-message agent'; div.id = 'typing';
     div.innerHTML = '<div class="chat-typing"><span></span><span></span><span></span></div>';
-    const area = document.getElementById('chat-messages');
-    area.appendChild(div);
-    area.scrollTop = area.scrollHeight;
+    document.getElementById('chat-messages').appendChild(div);
 }
-
-function removeTyping() {
-    document.getElementById('typing')?.remove();
-}
-
-document.getElementById('chat-input').addEventListener('keypress', e => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendChatMessage();
-    }
-});
+function removeTyping() { document.getElementById('typing')?.remove(); }
+document.getElementById('chat-input').addEventListener('keypress', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } });
 
 // ====================== VOICE ======================
 let mediaRecorder, audioChunks = [], isListening = false;
-
 async function toggleVoice() {
     if (isListening) { mediaRecorder?.stop(); return; }
     try {
@@ -463,81 +317,48 @@ async function toggleVoice() {
             const blob = new Blob(audioChunks, { type: 'audio/webm' });
             setStatus('🤖 Transcribing...', 'thinking');
             try {
-                const formData = new FormData();
-                formData.append('file', blob, 'audio.webm');
-                formData.append('model', 'whisper-large-v3-turbo');
-                const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${GROQ_KEY}` },
-                    body: formData
-                });
-                const data = await whisperRes.json();
+                const fd = new FormData(); fd.append('file', blob, 'audio.webm'); fd.append('model', 'whisper-large-v3-turbo');
+                const wRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', headers: { 'Authorization': `Bearer ${GROQ_KEY}` }, body: fd });
+                const data = await wRes.json();
                 const transcript = data.text;
-                if (!transcript) { setStatus('❌ No speech detected', 'error'); return; }
-                setStatus(`📝 "${transcript}" - processing...`, 'thinking');
-                
+                if (!transcript) { setStatus('❌ No speech', 'error'); return; }
+                setStatus(`📝 "${transcript}"`, 'thinking');
                 chatHistory.push({ role: 'user', content: transcript });
                 const reply = await processUserInput(transcript);
                 chatHistory.push({ role: 'assistant', content: reply });
-                
-                setStatus(`✅ Done`, 'success');
+                setStatus('✅ Done', 'success');
                 addToHistory(transcript, reply);
-            } catch (e) {
-                setStatus(`❌ ${e.message}`, 'error');
-            }
+            } catch(e) { setStatus(`❌ ${e.message}`, 'error'); }
         };
         mediaRecorder.start();
         isListening = true;
         document.getElementById('mic-btn').classList.add('listening');
         document.getElementById('mic-btn').textContent = '🔴 Recording...';
         setStatus('🎤 Listening...', 'thinking');
-    } catch (e) {
-        setStatus('❌ Microphone access denied', 'error');
-    }
+    } catch(e) { setStatus('❌ Mic access denied', 'error'); }
 }
 
 // ====================== CRUD ======================
 async function loadProducts() {
     try {
         const res = await fetch(API);
-        if (!res.ok) throw new Error('Failed to load');
+        if (!res.ok) throw new Error('Failed');
         allProducts = await res.json();
         renderTable(allProducts);
         updateStats();
-    } catch (e) {
-        document.getElementById("table").innerHTML = '<tr><td colspan="5">Error loading products</td></tr>';
-    }
+    } catch(e) { document.getElementById("table").innerHTML = '<tr><td colspan="5">Error loading</td></tr>'; }
 }
-
 function renderTable(products) {
-    const tbody = document.getElementById("table");
     const empty = document.getElementById("empty-state");
-    if (!products.length) {
-        tbody.innerHTML = '';
-        empty.style.display = 'block';
-    } else {
-        empty.style.display = 'none';
-        tbody.innerHTML = products.map(p => {
-            const safeName = JSON.stringify(p.name);
-            return `<tr>
-                <td><strong>${p.name}</strong></td>
-                <td>$${parseFloat(p.price).toFixed(2)}</td>
-                <td>${p.quantity}</td>
-                <td>$${(p.price * p.quantity).toFixed(2)}</td>
-                <td>
-                    <button class="btn-edit" onclick="editProduct(${p.id}, ${safeName}, ${p.price}, ${p.quantity})">Edit</button>
-                    <button class="btn-delete" onclick="deleteProduct(${p.id})">Delete</button>
-                </td>
-            </tr>`;
-        }).join('');
-    }
+    const tbody = document.getElementById("table");
+    if (!products.length) { tbody.innerHTML = ''; empty.style.display = 'block'; return; }
+    empty.style.display = 'none';
+    tbody.innerHTML = products.map(p => {
+        const safeName = JSON.stringify(p.name);
+        return `<tr><td><strong>${p.name}</strong></td><td>$${parseFloat(p.price).toFixed(2)}</td><td>${p.quantity}</td><td>$${(p.price * p.quantity).toFixed(2)}</td><td><button class="btn-edit" onclick="editProduct(${p.id}, ${safeName}, ${p.price}, ${p.quantity})">Edit</button><button class="btn-delete" onclick="deleteProduct(${p.id})">Delete</button></td></tr>`;
+    }).join('');
 }
-
-function filterProducts() {
-    const q = document.getElementById('search').value.toLowerCase();
-    renderTable(q ? allProducts.filter(p => p.name.toLowerCase().includes(q) || p.price.toString().includes(q)) : allProducts);
-}
-
+function filterProducts() { const q = document.getElementById('search').value.toLowerCase(); renderTable(q ? allProducts.filter(p => p.name.toLowerCase().includes(q) || p.price.toString().includes(q)) : allProducts); }
 function updateStats() {
     document.getElementById('total-products').textContent = allProducts.length;
     const val = allProducts.reduce((s, p) => s + (p.price * p.quantity), 0);
@@ -545,49 +366,27 @@ function updateStats() {
     const avg = allProducts.length ? allProducts.reduce((s, p) => s + Number(p.price), 0) / allProducts.length : 0;
     document.getElementById('avg-price').textContent = '$' + avg.toFixed(2);
 }
-
 async function createProduct() {
     const name = document.getElementById("name").value.trim();
     const price = parseFloat(document.getElementById("price").value);
     const quantity = parseInt(document.getElementById("quantity").value, 10);
     if (!name || isNaN(price) || isNaN(quantity)) return alert('Fill all fields correctly.');
-    await fetch(API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ name, price, quantity })
-    });
+    await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, price, quantity }) });
     document.getElementById("name").value = '';
     document.getElementById("price").value = '';
     document.getElementById("quantity").value = '';
     await loadProducts();
 }
-
-async function deleteProduct(id) {
-    if (!confirm('Delete this product?')) return;
-    await fetch(`${API}/${id}`, { method: 'DELETE' });
-    await loadProducts();
-}
-
+async function deleteProduct(id) { if (!confirm('Delete?')) return; await fetch(`${API}/${id}`, { method: 'DELETE' }); await loadProducts(); }
 async function editProduct(id, nameVal, priceVal, qtyVal) {
-    const newName = prompt('Product name:', nameVal);
-    if (newName === null || !newName.trim()) return;
-    const newPrice = prompt('Price:', priceVal);
-    if (newPrice === null) return;
-    const newQty = prompt('Quantity:', qtyVal);
-    if (newQty === null) return;
-    const priceNum = parseFloat(newPrice);
-    const qtyNum = parseInt(newQty, 10);
+    const newName = prompt('Name:', nameVal); if (!newName?.trim()) return;
+    const newPrice = prompt('Price:', priceVal); if (newPrice === null) return;
+    const newQty = prompt('Quantity:', qtyVal); if (newQty === null) return;
+    const priceNum = parseFloat(newPrice), qtyNum = parseInt(newQty);
     if (isNaN(priceNum) || isNaN(qtyNum)) return alert('Invalid number');
-    await fetch(`${API}/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName.trim(), price: priceNum, quantity: qtyNum })
-    });
+    await fetch(`${API}/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newName.trim(), price: priceNum, quantity: qtyNum }) });
     await loadProducts();
 }
-
-// Initial load
 loadProducts();
 </script>
-
 @endsection
