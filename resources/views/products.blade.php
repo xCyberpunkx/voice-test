@@ -30,7 +30,7 @@
 <div class="card">
     <h3>🎤 Voice Command</h3>
     <p style="color:#6b7280; font-size:14px; margin-bottom:10px;">
-        Try: "add product iPhone price 500 quantity 10" · "delete iPhone" · "show products"
+        Try: "add iPhone price 500 quantity 10" · "delete iPhone" · "show products"
     </p>
     <button class="btn-mic" id="mic-btn" onclick="toggleVoice()">🎤 Click to Speak</button>
     <div id="voice-status">Waiting for command...</div>
@@ -142,13 +142,20 @@ async function parseWithGroq(transcript) {
                 model: 'llama-3.1-8b-instant',
                 messages: [{
                     role: 'system',
-                    content: `You are a product management assistant. Parse voice commands into JSON only.
-                              Return ONLY a raw JSON object, no markdown, no explanation, no backticks.
-                              Format: { "action": "create|update|delete|list", "name": "string or null", "price": number or null, "quantity": number or null }
-                              Examples:
-                              "add iPhone price 500 quantity 10" → { "action": "create", "name": "iPhone", "price": 500, "quantity": 10 }
-                              "delete iPhone" → { "action": "delete", "name": "iPhone", "price": null, "quantity": null }
-                              "show all products" → { "action": "list", "name": null, "price": null, "quantity": null }`
+                    content: `You are a product management assistant. Extract product info from voice commands.
+Return ONLY a raw JSON object, no markdown, no backticks, no explanation.
+Format: { "action": "create|update|delete|list", "name": "string or null", "price": number or null, "quantity": number or null }
+
+Rules:
+- "name" must be the product name only, never null for create commands
+- "price" and "quantity" must be numbers only, never strings or words
+- If you cannot find a number for price or quantity, use null
+
+Examples:
+"add iPhone price 500 quantity 10" → { "action": "create", "name": "iPhone", "price": 500, "quantity": 10 }
+"create a product called Samsung for 300 dollars 5 units" → { "action": "create", "name": "Samsung", "price": 300, "quantity": 5 }
+"delete iPhone" → { "action": "delete", "name": "iPhone", "price": null, "quantity": null }
+"show all products" → { "action": "list", "name": null, "price": null, "quantity": null }`
                 }, {
                     role: 'user',
                     content: transcript
@@ -174,6 +181,7 @@ async function parseWithGroq(transcript) {
             parsed = JSON.parse(cleaned);
         }
 
+        console.log('PARSED:', JSON.stringify(parsed));
         setStatus(`🤖 AI understood: ${JSON.stringify(parsed)}`, 'thinking');
         await executeAction(parsed);
 
@@ -192,33 +200,64 @@ async function executeAction(cmd) {
         }
 
         if (cmd.action === 'create') {
+            if (!cmd.name) {
+                setStatus('❌ Could not understand product name. Try: "add iPhone price 500 quantity 10"', 'error');
+                return;
+            }
+            if (cmd.price === null || cmd.price === undefined) {
+                setStatus('❌ Could not understand price. Try: "add iPhone price 500 quantity 10"', 'error');
+                return;
+            }
+            if (cmd.quantity === null || cmd.quantity === undefined) {
+                setStatus('❌ Could not understand quantity. Try: "add iPhone price 500 quantity 10"', 'error');
+                return;
+            }
+
             const res = await fetch(API, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                 body: JSON.stringify({ name: cmd.name, price: cmd.price, quantity: cmd.quantity })
             });
+
             const result = await res.json();
+            console.log('CREATE RESULT:', result);
+
             if (!res.ok) {
                 setStatus(`❌ Create failed: ${JSON.stringify(result)}`, 'error');
                 return;
             }
+
             setStatus(`✅ Created "${cmd.name}"`, 'success');
         }
 
         if (cmd.action === 'delete') {
+            if (!cmd.name) {
+                setStatus('❌ Could not understand product name to delete', 'error');
+                return;
+            }
             const res = await fetch(API);
             const products = await res.json();
             const match = products.find(p => p.name.toLowerCase().includes(cmd.name.toLowerCase()));
-            if (!match) { setStatus(`❌ Product "${cmd.name}" not found`, 'error'); return; }
+            if (!match) {
+                setStatus(`❌ Product "${cmd.name}" not found`, 'error');
+                return;
+            }
             await fetch(`${API}/${match.id}`, { method: 'DELETE' });
             setStatus(`✅ Deleted "${match.name}"`, 'success');
         }
 
         if (cmd.action === 'update') {
+            if (!cmd.name) {
+                setStatus('❌ Could not understand product name to update', 'error');
+                return;
+            }
             const res = await fetch(API);
             const products = await res.json();
             const match = products.find(p => p.name.toLowerCase().includes(cmd.name.toLowerCase()));
-            if (!match) { setStatus(`❌ Product "${cmd.name}" not found`, 'error'); return; }
+            if (!match) {
+                setStatus(`❌ Product "${cmd.name}" not found`, 'error');
+                return;
+            }
             await fetch(`${API}/${match.id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -260,14 +299,22 @@ async function createProduct() {
     const name = document.getElementById("name").value;
     const price = document.getElementById("price").value;
     const quantity = document.getElementById("quantity").value;
+
+    if (!name || !price || !quantity) {
+        alert('Please fill in all fields');
+        return;
+    }
+
     await fetch(API, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Accept": "application/json" },
         body: JSON.stringify({ name, price, quantity })
     });
+
     document.getElementById("name").value = "";
     document.getElementById("price").value = "";
     document.getElementById("quantity").value = "";
+
     loadProducts();
 }
 
