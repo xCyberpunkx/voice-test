@@ -53,11 +53,10 @@
 </div>
 
 <div class="card">
-    <h3>🎤 Voice Command (speak any language!)</h3>
+    <h3>🎤 Voice Command (English & French)</h3>
     <p style="color:#6b7280; font-size:14px; margin-bottom:10px;">
         English: "add iPhone price 500 quantity 10" · "rename iPhone to Xiaomi" · "delete Samsung"<br>
-        Spanish: "agregar iPhone precio 500 cantidad 10" · French: "ajouter iPhone prix 500 quantité 10"<br>
-        Hindi: "iPhone जोड़ें कीमत 500 मात्रा 10" · Chinese: "添加 iPhone 价格 500 数量 10"
+        French: "ajoutez iPhone prix 500 quantité 10" · "renommez Samsung en Galaxy" · "supprimer iPhone"
     </p>
     <button class="btn-mic" id="mic-btn" onclick="toggleVoice()">🎤 Click to Speak</button>
     <button class="btn-clear" onclick="clearHistory()" style="margin-left:10px;">Clear History</button>
@@ -120,87 +119,107 @@ function clearHistory() {
     renderHistory();
 }
 
-// ---------- Fast local parser (enhanced) ----------
-function fastParse(englishText) {
-    const t = englishText.toLowerCase().trim();
+// ---------- Enhanced fast parser (English + French) ----------
+function fastParse(text) {
+    const t = text.toLowerCase().trim();
 
-    // 1. List command
-    if (/\b(show|list|all|display|products|items|goods|inventory)\b/.test(t) && 
-        !/\b(delete|remove|add|create|update|change|set|rename|edit)\b/.test(t)) {
+    // Helper to check if any word from a list exists in the text
+    const hasWord = (words) => words.some(w => t.includes(w));
+    const hasAnyExcluding = (words, excluding) => hasWord(words) && !hasWord(excluding);
+
+    // 1. List command (English & French)
+    if (hasAnyExcluding(
+        ['show', 'list', 'all', 'display', 'products', 'items', 'inventory', 'tous', 'affiche', 'montre', 'produits', 'articles', 'stock', 'liste', 'affichez'],
+        ['delete', 'remove', 'add', 'create', 'update', 'change', 'set', 'rename', 'edit', 'ajoute', 'ajouter', 'ajoutez', 'supprimer', 'renommer', 'modifier']
+    )) {
         return { action: "list", name: null, price: null, quantity: null };
     }
 
-    // 2. Delete/Remove command
-    const deleteMatch = t.match(/\b(delete|remove|eliminate|erase|clear|destroy)\s+(\w+)/);
-    if (deleteMatch) {
-        return { action: "delete", name: deleteMatch[2], price: null, quantity: null };
+    // 2. Delete command
+    // English
+    let match = t.match(/\b(delete|remove|eliminate|erase|clear|destroy|supprimer|enlever|effacer|supprimez|enlevez)\s+(\w+)/);
+    if (match) {
+        return { action: "delete", name: match[2], price: null, quantity: null };
     }
+    // French "supprimer le produit iPhone" -> capture "iPhone"
+    match = t.match(/(supprimer|enlever|effacer|supprimez|enlevez)\s+(?:le |la |l'|les )?(\w+)/);
+    if (match) return { action: "delete", name: match[2], price: null, quantity: null };
 
     // 3. Create / Add command
-    const addMatch = t.match(/\b(add|create|new|insert|put)\s+(\w+).*?\b(price|cost|amount)\s*(\d+(?:\.\d+)?).*?\b(quantity|qty|count|stock|units)\s*(\d+)/);
-    if (addMatch) {
+    // English pattern
+    match = t.match(/\b(add|create|new|insert|put|ajouter|ajoutez|ajoute|créer|créez|nouveau|nouvel|nouvelle|insérer|insérez|mettre)\s+(\w+).*?\b(price|prix|cost|coût|montant|valeur)\s*(\d+(?:\.\d+)?).*?\b(quantity|qty|count|stock|units|quantité|qté|nombre|unités)\s*(\d+)/);
+    if (match) {
         return {
             action: "create",
-            name: addMatch[2],
-            price: parseFloat(addMatch[4]),
-            quantity: parseInt(addMatch[6], 10)
+            name: match[2],
+            price: parseFloat(match[4]),
+            quantity: parseInt(match[6], 10)
+        };
+    }
+    // French flexible pattern: "ajoutez iPhone prix 500 quantité 10"
+    match = t.match(/(ajouter|ajoutez|ajoute|créer|créez|insérer|insérez|mettre|nouveau)\s+(\w+).*?\b(prix|coût|montant|valeur)\s*(\d+(?:\.\d+)?).*?\b(quantité|qté|nombre|unités)\s*(\d+)/);
+    if (match) {
+        return {
+            action: "create",
+            name: match[2],
+            price: parseFloat(match[4]),
+            quantity: parseInt(match[6], 10)
         };
     }
 
     // 4. Rename command
-    const renameMatch = t.match(/\b(rename|change\s+(the\s+)?name\s+(of|for)|edit\s+(the\s+)?name\s+(of|for)|update\s+(the\s+)?name\s+(of|for))\s+(\w+)\s+(?:to|into|as|->|with)\s+(\w+)/);
-    if (renameMatch) {
-        // The product name is in group 6 (index 6), new name in group 7
-        const matches = [...t.matchAll(/\b(rename|change\s+(the\s+)?name\s+(of|for)|edit\s+(the\s+)?name\s+(of|for)|update\s+(the\s+)?name\s+(of|for))\s+(\w+)\s+(?:to|into|as|->|with)\s+(\w+)/g)][0];
-        if (matches) {
-            return {
-                action: "rename",
-                name: matches[matches.length - 2],
-                newName: matches[matches.length - 1]
-            };
+    // English: "rename iPhone to Xiaomi", "edit the name of iPhone to Xiaomi", "change name of iPhone to Xiaomi"
+    match = t.match(/\b(rename|change\s+(the\s+)?name\s+(of|for)|edit\s+(the\s+)?name\s+(of|for)|update\s+(the\s+)?name\s+(of|for)|renommer|renommez|changer\s+(?:le\s+)?nom\s+(?:de|d'|du)\s?|modifier\s+(?:le\s+)?nom\s+(?:de|d'|du)\s?)\s+(\w+)\s+(?:to|into|as|->|with|en|à|vers|par)\s+(\w+)/);
+    if (match) {
+        // The name and newName are the last two captures
+        const groups = match[0].match(/(\w+)\s+(?:to|into|as|->|with|en|à|vers|par)\s+(\w+)$/);
+        if (groups) {
+            return { action: "rename", name: groups[1], newName: groups[2] };
+        }
+        // alternative extraction
+        const parts = match[0].split(/\s+(?:to|into|as|->|with|en|à|vers|par)\s+/);
+        if (parts.length === 2) {
+            const oldName = parts[0].split(/\s+/).pop();
+            const newName = parts[1];
+            return { action: "rename", name: oldName, newName: newName };
         }
     }
-
-    // Simpler pattern: "rename iPhone to Xiaomi"
-    const simpleRename = t.match(/\brename\s+(\w+)\s+(?:to|into|as)\s+(\w+)/);
-    if (simpleRename) {
-        return {
-            action: "rename",
-            name: simpleRename[1],
-            newName: simpleRename[2]
-        };
+    // simpler "renommer Samsung en Galaxy", "rename Samsung to Galaxy"
+    match = t.match(/(rename|renommer|renommez|changer\s+nom\s?|modifier\s+nom\s?)\s+(\w+)\s+(?:to|into|en|à|vers|par|->)\s+(\w+)/);
+    if (match) {
+        return { action: "rename", name: match[2], newName: match[3] };
     }
 
-    // 5. Update price
-    const updatePrice = t.match(/\b(update|change|set|modify|adjust)\s+(\w+).*?\b(price|cost|amount)\s+(?:to\s+)?(\d+(?:\.\d+)?)/);
-    if (updatePrice) {
+    // 5. Update price command
+    match = t.match(/\b(update|change|set|modify|adjust|modifier|modifiez|changer|changez|mettre\s+à\s+jour|mettre\s+le\s+prix)\s+(\w+).*?\b(price|prix|cost|coût|montant|valeur)\s+(?:to\s+|à\s+|de\s+)?(\d+(?:\.\d+)?)/);
+    if (match) {
         return {
             action: "update",
-            name: updatePrice[2],
-            price: parseFloat(updatePrice[4]),
+            name: match[2],
+            price: parseFloat(match[4]),
             quantity: null
         };
     }
 
-    // 6. Update quantity
-    const updateQty = t.match(/\b(update|change|set|modify|adjust)\s+(\w+).*?\b(quantity|qty|count|stock|units)\s+(?:to\s+)?(\d+)/);
-    if (updateQty) {
+    // 6. Update quantity command
+    match = t.match(/\b(update|change|set|modify|adjust|modifier|modifiez|changer|changez)\s+(\w+).*?\b(quantity|qty|count|stock|units|quantité|qté|nombre|unités)\s+(?:to\s+|à\s+)?(\d+)/);
+    if (match) {
         return {
             action: "update",
-            name: updateQty[2],
+            name: match[2],
             price: null,
-            quantity: parseInt(updateQty[4], 10)
+            quantity: parseInt(match[4], 10)
         };
     }
 
-    return null;
+    return null; // No match, fallback to AI
 }
 
-// ---------- Translate to English ----------
+// ---------- Translate to English (used only for non-English/French) ----------
 async function translateToEnglish(text, sourceLang) {
-    if (!sourceLang || sourceLang === 'en' || sourceLang === 'english') {
-        return text;
-    }
+    if (!sourceLang || sourceLang === 'en' || sourceLang === 'english') return text;
+    // French is already handled by fastParse, no need to translate
+    if (sourceLang === 'fr' || sourceLang === 'french') return text;
     try {
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
@@ -229,7 +248,7 @@ async function translateToEnglish(text, sourceLang) {
     }
 }
 
-// ---------- AI fallback parser ----------
+// ---------- AI fallback parser (strong prompt with many examples) ----------
 async function aiParse(englishText) {
     try {
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -241,18 +260,49 @@ async function aiParse(englishText) {
             body: JSON.stringify({
                 model: 'llama3-8b-8192',
                 messages: [
-                    { role: 'system', content: `You are a product management assistant. Parse voice commands into JSON.
-Return ONLY raw JSON (no markdown, no explanation).
+                    { role: 'system', content: `You are a product management assistant. Parse voice commands into a JSON action. Return ONLY raw JSON (no markdown, no explanation).
 
 Format: { "action": "create|update|delete|list|rename", "name": "string or null", "newName": "string or null", "price": number or null, "quantity": number or null }
 
 Rules:
-- "rename": provide "name" (current name) and "newName"
+- "rename": provide "name" (current product name) and "newName"
 - "create": include name, price, quantity
-- "update": include name and the fields to change
+- "update": include name and the fields to change (price, quantity, or both)
 - "delete": include only name
 - "list": set everything to null
-- Convert written numbers to digits (e.g., "five hundred" → 500)` },
+- Convert written numbers to digits: e.g., "five hundred" -> 500, "cinq cents" -> 500
+- Do not wrap JSON in backticks.
+
+Examples (English):
+"add iPhone price 500 quantity 10" -> {"action":"create","name":"iPhone","price":500,"quantity":10}
+"delete Samsung" -> {"action":"delete","name":"Samsung","price":null,"quantity":null}
+"show all products" -> {"action":"list","name":null,"price":null,"quantity":null}
+"rename iPhone to Xiaomi" -> {"action":"rename","name":"iPhone","newName":"Xiaomi","price":null,"quantity":null}
+"change name of Samsung to Galaxy" -> {"action":"rename","name":"Samsung","newName":"Galaxy"}
+"edit the name of iPhone to Xiaomi" -> {"action":"rename","name":"iPhone","newName":"Xiaomi"}
+"update Samsung price to 600" -> {"action":"update","name":"Samsung","price":600,"quantity":null}
+"change Samsung quantity to 20" -> {"action":"update","name":"Samsung","price":null,"quantity":20}
+"could you please add a new product called Pixel price 699 quantity 8" -> {"action":"create","name":"Pixel","price":699,"quantity":8}
+"I want to see what products we have" -> {"action":"list"}
+"put a MacBook into the system for 1299 and 5 in stock" -> {"action":"create","name":"MacBook","price":1299,"quantity":5}
+"remove the iPad" -> {"action":"delete","name":"iPad"}
+"modify Galaxy price 750" -> {"action":"update","name":"Galaxy","price":750,"quantity":null}
+
+Examples (French):
+"ajoutez iPhone prix 500 quantité 10" -> {"action":"create","name":"iPhone","price":500,"quantity":10}
+"ajouter iPhone prix 500 quantité 10" -> {"action":"create","name":"iPhone","price":500,"quantity":10}
+"créer un produit Samsung à 300 dollars" -> {"action":"create","name":"Samsung","price":300,"quantity":null}
+"supprimer Samsung" -> {"action":"delete","name":"Samsung","price":null,"quantity":null}
+"afficher tous les produits" -> {"action":"list"}
+"montre les articles" -> {"action":"list"}
+"renommer Samsung en Galaxy" -> {"action":"rename","name":"Samsung","newName":"Galaxy"}
+"changer le nom de iPhone en Xiaomi" -> {"action":"rename","name":"iPhone","newName":"Xiaomi"}
+"modifier le prix de Samsung à 600 euros" -> {"action":"update","name":"Samsung","price":600,"quantity":null}
+"mettre à jour la quantité de iPhone à 25" -> {"action":"update","name":"iPhone","price":null,"quantity":25}
+"supprimez le produit iPhone" -> {"action":"delete","name":"iPhone"}
+
+If the command is ambiguous or doesn't match any action, return {"action":"list"} (show products as fallback).`
+                    },
                     { role: 'user', content: englishText }
                 ],
                 temperature: 0,
@@ -264,7 +314,6 @@ Rules:
         let raw = data.choices[0].message.content.trim();
         // Clean any markdown
         raw = raw.replace(/^```[\s\S]*?\n/, '').replace(/\n```$/, '').replace(/^`+|`+$/g, '').trim();
-        // Extract JSON if embedded in text
         const jsonMatch = raw.match(/\{[\s\S]*\}/);
         if (jsonMatch) raw = jsonMatch[0];
         return JSON.parse(raw);
@@ -321,12 +370,14 @@ async function toggleVoice() {
                 
                 setStatus(`📝 Heard (${langName}): "${transcript}"`, 'thinking');
                 
-                // Translate if not English
-                const englishText = await translateToEnglish(transcript, lang);
-                console.log('English translation:', englishText);
+                // If not English or French, translate to English for the fast parser
+                let textForParsing = transcript;
+                if (lang !== 'en' && lang !== 'fr') {
+                    textForParsing = await translateToEnglish(transcript, lang);
+                }
                 
-                // Try fast parser first
-                let command = fastParse(englishText);
+                // Try fast parser first (handles English & French)
+                let command = fastParse(textForParsing);
                 
                 if (command) {
                     console.log('FAST PARSER:', command);
@@ -334,7 +385,9 @@ async function toggleVoice() {
                 } else {
                     // Fallback to AI
                     setStatus('🧠 Fast parser missed, using AI...', 'thinking');
-                    command = await aiParse(englishText);
+                    // For AI, we always use English text; if the text is already English, we're fine. If French, translate.
+                    const englishForAI = (lang === 'en') ? transcript : (lang === 'fr') ? await translateToEnglish(transcript, 'fr') : textForParsing;
+                    command = await aiParse(englishForAI);
                     if (!command) {
                         setStatus('❌ Could not understand the command. Please try again.', 'error');
                         addToHistory(transcript, 'Failed to understand');
@@ -367,7 +420,7 @@ async function toggleVoice() {
     }
 }
 
-// ---------- Execute the parsed action ----------
+// ---------- Execute the parsed action (robust error display) ----------
 async function executeAction(cmd) {
     try {
         if (cmd.action === 'list') {
@@ -401,8 +454,8 @@ async function executeAction(cmd) {
             });
             
             if (!res.ok) {
-                const err = await res.json();
-                setStatus(`❌ Create failed: ${err.message || JSON.stringify(err)}`, 'error');
+                const err = await res.text();
+                setStatus(`❌ Create failed: ${err}`, 'error');
                 return false;
             }
             setStatus(`✅ Created "${cmd.name}" - $${cmd.price}, Qty: ${cmd.quantity}`, 'success');
@@ -444,14 +497,17 @@ async function executeAction(cmd) {
             
             const res = await fetch(`${API}/${match.id}`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                 body: JSON.stringify({ name: cmd.newName.trim() })
             });
             
             if (!res.ok) {
-                setStatus('❌ Rename failed', 'error');
+                const errorBody = await res.text();
+                console.error('Rename error:', errorBody);
+                setStatus(`❌ Rename failed: ${errorBody}`, 'error');
                 return false;
             }
+            
             setStatus(`✅ Renamed "${cmd.name}" to "${cmd.newName}"`, 'success');
             await loadProducts();
             return true;
@@ -487,7 +543,8 @@ async function executeAction(cmd) {
             });
             
             if (!res.ok) {
-                setStatus('❌ Update failed', 'error');
+                const errorBody = await res.text();
+                setStatus(`❌ Update failed: ${errorBody}`, 'error');
                 return false;
             }
             setStatus(`✅ Updated "${match.name}" successfully`, 'success');
