@@ -30,7 +30,7 @@
 <div class="card">
     <h3>🎤 Voice Command</h3>
     <p style="color:#6b7280; font-size:14px; margin-bottom:10px;">
-        Try: "add iPhone price 500 quantity 10" · "delete iPhone" · "show products"
+        English: "add iPhone price 500 quantity 10" · Arabic: "أضف منتج آيفون سعر 500 كمية 10" · French: "ajoute iPhone prix 500 quantité 10"
     </p>
     <button class="btn-mic" id="mic-btn" onclick="toggleVoice()">🎤 Click to Speak</button>
     <div id="voice-status">Waiting for command...</div>
@@ -95,6 +95,7 @@ async function toggleVoice() {
                 const formData = new FormData();
                 formData.append('file', audioBlob, 'audio.webm');
                 formData.append('model', 'whisper-large-v3-turbo');
+                formData.append('language', 'ar');
 
                 const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
                     method: 'POST',
@@ -142,7 +143,7 @@ async function parseWithGroq(transcript) {
                 model: 'llama-3.1-8b-instant',
                 messages: [{
                     role: 'system',
-                    content: `You are a product management assistant. Extract product info from voice commands.
+                    content: `You are a product management assistant. Extract product info from voice commands in any language including Arabic, French, and English.
 Return ONLY a raw JSON object, no markdown, no backticks, no explanation.
 Format: { "action": "create|update|delete|list", "name": "string or null", "price": number or null, "quantity": number or null }
 
@@ -150,12 +151,14 @@ Rules:
 - "name" must be the product name only, never null for create commands
 - "price" and "quantity" must be numbers only, never strings or words
 - If you cannot find a number for price or quantity, use null
+- Product names can be in any language, keep them as spoken
 
 Examples:
 "add iPhone price 500 quantity 10" → { "action": "create", "name": "iPhone", "price": 500, "quantity": 10 }
-"create a product called Samsung for 300 dollars 5 units" → { "action": "create", "name": "Samsung", "price": 300, "quantity": 5 }
-"delete iPhone" → { "action": "delete", "name": "iPhone", "price": null, "quantity": null }
-"show all products" → { "action": "list", "name": null, "price": null, "quantity": null }`
+"أضف منتج آيفون سعر 500 كمية 10" → { "action": "create", "name": "آيفون", "price": 500, "quantity": 10 }
+"احذف آيفون" → { "action": "delete", "name": "آيفون", "price": null, "quantity": null }
+"اعرض المنتجات" → { "action": "list", "name": null, "price": null, "quantity": null }
+"ajoute iPhone prix 500 quantité 10" → { "action": "create", "name": "iPhone", "price": 500, "quantity": 10 }`
                 }, {
                     role: 'user',
                     content: transcript
